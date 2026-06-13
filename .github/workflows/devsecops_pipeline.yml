@@ -32,10 +32,10 @@ jobs:
 
     - name: 🛡️ Análisis Estático de Seguridad (SAST con Bandit)
       run: |
-        # Escanea buscando malas prácticas (como el uso inseguro de deserialización/pickle)
-        bandit -r . -x ./.venv,./venv -ll
+        # Usamos uv run para ejecutar bandit dentro del entorno virtual y excluimos carpetas locales
+        uv run bandit -r . -x ./.venv,./venv,./mlruns -ll
 
     - name: 🧪 Ejecutar Suite de Pruebas Unitarias (Testing Automatizado)
       run: |
-        source .venv/bin/activate
-        python test_pipeline.py
+        # Usamos uv run para ejecutar las pruebas unitarias garantizando que cargue las librerías del venv
+        uv run python test_pipeline.py
