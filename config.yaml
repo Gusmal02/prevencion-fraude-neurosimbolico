@@ -1,0 +1,28 @@
+# Configuración de Rutas de Datos
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  train_file: "data/processed/train_processed.csv"
+  test_file: "data/processed/test_processed.csv"
+
+# Hiperparámetros del Radar Estadístico (Capa 1)
+isolation_forest:
+  n_estimators: 100
+  contamination: 0.05
+  random_state: 42
+
+# Hiperparámetros del Clasificador LightGBM (Capa 3)
+lightgbm:
+  n_estimators: 200
+  learning_rate: 0.05
+  num_leaves: 31
+  scale_pos_weight: 27.5  # Ajuste por el desbalance del 3.5% de fraude
+  random_state: 42
+
+# Parámetros del Motor de Reglas (Razonamiento Simbólico)
+rules:
+  high_risk_amount: 5000.0  # Umbral duro para auditoría inmediata
+  prob_low_threshold: 0.15     # Límite inferior de la zona gris
+  prob_high_threshold: 0.85    # Límite superior de la zona gris
+  high_risk_amount_ratio: 3.0  # Ratio de monto sobre la media
+  critical_anomaly_score: -0.65 # Score de aislamiento crítico

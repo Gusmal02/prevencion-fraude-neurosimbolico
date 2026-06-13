@@ -3,71 +3,87 @@ import pandas as pd
 import numpy as np
 import lightgbm as lgb
 from sklearn.metrics import confusion_matrix, classification_report
+# Respetamos el principio de Inyección de Dependencias
+from generar_eda import cargar_configuracion
 
-DATA_PROCESSED_DIR = "data/processed"
-INPUT_FILE = os.path.join(DATA_PROCESSED_DIR, "final_features_transactions.csv")
-
-def ejecutar_sistema_neurosimbolico():
-    print("[NEUROSYMBOLIC] Cargando características finales y entrenando base...")
+def ejecutar_sistema_neurosimbolico(config):
+    print("\n[NEUROSYMBOLIC] Cargando configuración e inicializando el sistema híbrido...")
     
-    # 1. Cargamos y preparamos las variables (mismo split temporal)
+    # 1. Recuperar rutas y parámetros dinámicamente desde el config.yaml real
+    processed_dir = config['data']['processed_dir']
+    input_file = os.path.join(processed_dir, "final_features_transactions.csv")
+    
+    # Extraemos parámetros de hiperparametrización y del motor de reglas en inglés
+    lgb_params = config['lightgbm']
+    rules_params = config['rules']
+    
     columnas_clave = [
         'isFraud', 'TransactionDT', 'TransactionAmt', 'card1', 'card2',
         'is_anomaly', 'anomaly_score', 'TransactionAmt_to_mean_card1',
         'TransactionAmt_to_std_card1', 'card1_transaction_count',
         'missing_device_type', 'missing_device_info'
     ]
-    df = pd.read_csv(INPUT_FILE, usecols=columnas_clave).sort_values('TransactionDT').reset_index(drop=True)
     
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(f"No se encontró el dataset final en: {input_file}")
+        
+    df = pd.read_csv(input_file, usecols=columnas_clave).sort_values('TransactionDT').reset_index(drop=True)
+    
+    # Split Temporal (80% Train / 20% Validation)
     split_idx = int(len(df) * 0.8)
     train_df = df.iloc[:split_idx]
-    val_df = df.iloc[split_idx:].copy() # Trabajamos sobre la copia de validación
+    val_df = df.iloc[split_idx:].copy()
     
     X_train = train_df.drop(columns=['isFraud', 'TransactionDT'])
     y_train = train_df['isFraud']
     X_val = val_df.drop(columns=['isFraud', 'TransactionDT'])
     y_val = val_df['isFraud']
     
-    # Re-entrenamos rápidamente el LightGBM para obtener las probabilidades base
+    # Balanceo dinámico basado en los datos de entrenamiento actuales
     ratio = (len(y_train) - y_train.sum()) / y_train.sum()
-    model = lgb.LGBMClassifier(n_estimators=200, learning_rate=0.05, num_leaves=31, scale_pos_weight=ratio, random_state=42, verbose=-1, n_jobs=-1)
+    
+    print("[NEUROSYMBOLIC] Re-entrenando componente probabilístico base (LightGBM)...")
+    model = lgb.LGBMClassifier(
+        n_estimators=lgb_params['n_estimators'],
+        learning_rate=lgb_params['learning_rate'],
+        num_leaves=lgb_params['num_leaves'],
+        scale_pos_weight=ratio,
+        random_state=lgb_params['random_state'],
+        verbose=-1,
+        n_jobs=-1
+    )
     model.fit(X_train, y_train)
     
-    # Extraemos las probabilidades puras del componente neuronal/estadístico
+    # Extraemos las probabilidades puras del clasificador
     val_df['prob_fraude'] = model.predict_proba(X_val)[:, 1]
     
-    print("\n[NEUROSYMBOLIC] Aplicando Motor de Reglas Simbólicas sobre la Zona Gris...")
+    print("[NEUROSYMBOLIC] Aplicando Motor de Reglas Simbólicas vectorizado sobre la Zona Gris...")
     
-    # 2. Definición del Motor Simbólico (Reglas lógicas del experto)
-    veredictos_finales = []
+    # 2. EVALUACIÓN VECTORIZADA (Optimización de rendimiento para producción)
+    # Inicializamos todas las decisiones por defecto en 0 (Permitir)
+    val_df['decision_final'] = 0
     
-    for idx, row in val_df.iterrows():
-        p = row['prob_fraude']
-        
-        # CAPA 1: Regla Estadística de Extremos
-        if p < 0.15:
-            veredicto = 0 # Legítima segura
-        elif p > 0.85:
-            veredicto = 1 # Fraude seguro (Bloqueo inmediato)
-            
-        # CAPA 2: Evaluación Simbólica en la Zona Gris (0.15 <= p <= 0.85)
-        else:
-            # Regla lógica A: Si el monto supera por mucho la media del usuario Y ocultó su dispositivo
-            condicion_dispositivo_oculto = (row['missing_device_type'] == 1) or (row['missing_device_info'] == 1)
-            condicion_monto_anormal = row['TransactionAmt_to_mean_card1'] > 3.0
-            
-            # Regla lógica B: Si el Isolation Forest lo considera una anomalía severa (score muy bajo)
-            condicion_aislamiento_critico = row['anomaly_score'] < -0.65
-            
-            # Inferencia lógica combinada (Símbolos booleanos)
-            if (condicion_monto_anormal and condicion_dispositivo_oculto) or condicion_aislamiento_critico:
-                veredicto = 1 # Activación de regla dura: Bloquear
-            else:
-                veredicto = 0 # No cumple las condiciones de peligro extremo: Permitir transaccionar
-                
-        veredictos_finales.append(veredicto)
-        
-    val_df['decision_final'] = veredictos_finales
+    # Extraemos los umbrales lógicos inyectados desde el YAML
+    p_low = rules_params['prob_low_threshold']      # Por ejemplo: 0.15
+    p_high = rules_params['prob_high_threshold']    # Por ejemplo: 0.85
+    monto_ratio_max = rules_params['high_risk_amount_ratio'] # Por ejemplo: 3.0
+    score_isof_critico = rules_params['critical_anomaly_score'] # Por ejemplo: -0.65
+    
+    # CAPA 1: Regla Probabilística de Extremos Duros
+    val_df.loc[val_df['prob_fraude'] > p_high, 'decision_final'] = 1  # Fraude Directo Seguro
+    
+    # CAPA 2: Lógica Simbólica Avanzada aplicada estrictamente sobre la Zona Gris
+    zona_gris_mask = (val_df['prob_fraude'] >= p_low) & (val_df['prob_fraude'] <= p_high)
+    
+    condicion_dispositivo_oculto = (val_df['missing_device_type'] == 1) | (val_df['missing_device_info'] == 1)
+    condicion_monto_anormal = val_df['TransactionAmt_to_mean_card1'] > monto_ratio_max
+    condicion_aislamiento_critico = val_df['anomaly_score'] < score_isof_critico
+    
+    # Combinación simbólica booleana
+    regla_fraude_zona_gris = (condicion_monto_anormal & condicion_dispositivo_oculto) | condicion_aislamiento_critico
+    
+    # Aplicamos el bloqueo a las transacciones de la zona gris que cumplan las reglas duras
+    val_df.loc[zona_gris_mask & regla_fraude_zona_gris, 'decision_final'] = 1
     
     # 3. Evaluación del Impacto de Negocio del Sistema Híbrido
     print("\n================ METRICAS DEL SISTEMA NEUROSIMBÓLICO ================")
@@ -78,8 +94,8 @@ def ejecutar_sistema_neurosimbolico():
     print("\nReporte de Clasificación Final:")
     print(classification_report(y_val, val_df['decision_final'], target_names=['Legítima', 'Fraude']))
     
-    # Comparativa de Falsos Positivos contra el modelo anterior
-    falsos_positivos_anteriores = 20098
+    # Comparativa basada en la matriz previa de falsos positivos
+    falsos_positivos_anteriores = 20256
     falsos_positivos_actuales = cm_hybrid[0, 1]
     reduccion = falsos_positivos_anteriores - falsos_positivos_actuales
     
@@ -90,4 +106,10 @@ def ejecutar_sistema_neurosimbolico():
     print("=====================================================================")
 
 if __name__ == "__main__":
-    ejecutar_sistema_neurosimbolico()
+    print("==================================================================")
+    print("== RUNNING HYBRID NEURO-SYMBOLIC ENGINE: INTERPRETER VERSION ==")
+    print("==================================================================")
+    
+    # Cargar los parámetros globales antes de la orquestación
+    config_global = cargar_configuracion()
+    ejecutar_sistema_neurosimbolico(config_global)

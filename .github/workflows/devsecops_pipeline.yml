@@ -1,0 +1,41 @@
+name: DevSecOps Fraud Pipeline
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  continuous-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Clonar Repositorio
+      uses: actions/checkout@v4
+
+    - name: 🛠️ Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: 🚀 Instalar y Configurar UV (Rust-powered package manager)
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: 📦 Instalar Dependencias del Sistema
+      run: |
+        uv venv
+        uv pip install -r requirements.txt
+        uv pip install bandit
+
+    - name: 🛡️ Análisis Estático de Seguridad (SAST con Bandit)
+      run: |
+        # Escanea buscando malas prácticas (como el uso inseguro de deserialización/pickle)
+        bandit -r . -x ./.venv,./venv -ll
+
+    - name: 🧪 Ejecutar Suite de Pruebas Unitarias (Testing Automatizado)
+      run: |
+        source .venv/bin/activate
+        python test_pipeline.py

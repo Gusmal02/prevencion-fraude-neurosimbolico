@@ -1,0 +1,26 @@
+# Entornos virtuales locales
+.venv/
+venv/
+ENV/
+env/
+
+# Datos masivos (Cache de Kaggle e Historial local)
+.cache/
+data/raw/
+data/processed/
+mlruns/
+
+# Archivos de control de IDEs y Git
+.git/
+.gitignore
+.github/
+.vscode/
+
+# Archivos temporales de Python y pruebas
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+config_test_temp.yaml
+classification_report.txt

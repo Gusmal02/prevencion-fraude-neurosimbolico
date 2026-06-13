@@ -3,11 +3,10 @@ import pandas as pd
 import numpy as np
 import kagglehub
 from sklearn.ensemble import IsolationForest
+# Importamos el cargador centralizado para respetar la inyección de dependencias
+from generar_eda import cargar_configuracion
 
-# Configuración de rutas locales profesionales
-DATA_PROCESSED_DIR = "data/processed"
-
-def extract_ieee_data():
+def extract_ieee_data(config):
     """
     EXTRACT: Descarga y une las tablas de transacciones e identidad.
     """
@@ -30,19 +29,21 @@ def extract_ieee_data():
     return df_merged
 
 
-def transform_and_enrich(df):
+def transform_and_enrich(df, config):
     """
     TRANSFORM: Limpieza, preparación de variables esenciales y 
-    aplicación de la Capa 1 No Supervisada (Isolation Forest).
+    aplicación de la Capa 1 No Supervisada (Isolation Forest) gobernada por YAML.
     """
     print("\n[ETL - TRANSFORM] Iniciando fase de transformación...")
     df_transformed = df.copy()
     
-    # 1. Selección de variables numéricas clave para el Isolation Forest
-    # Elegimos variables financieras y de comportamiento del cliente básico
-    features_for_anomaly = ['TransactionAmt', 'TransactionDT', 'card1', 'card2', 'card3', 'card5']
+    # CORRECCIÓN: Acceso directo a la llave raíz del config.yaml real
+    iso_config = config['isolation_forest']
     
-    print(f"[ETL - TRANSFORM] Seleccionando variables para Isolation Forest: {features_for_anomaly}")
+    # Respaldo seguro en caso de que no se listen las variables explícitamente en el YAML
+    features_for_anomaly = iso_config['features'] if 'features' in iso_config else ['TransactionAmt', 'TransactionDT', 'card1', 'card2', 'card3', 'card5']
+    
+    print(f"[ETL - TRANSFORM] Seleccionando variables para Isolation Forest desde config: {features_for_anomaly}")
     
     # Creamos un sub-dataframe de trabajo y manejamos los nulos con un valor bandera
     df_sub = df_transformed[features_for_anomaly].copy()
@@ -50,35 +51,41 @@ def transform_and_enrich(df):
         if df_sub[col].isnull().sum() > 0:
             df_sub[col] = df_sub[col].fillna(-999) # Indicador explícito de dato faltante
             
-    # 2. Configuración y entrenamiento de Isolation Forest
-    # El dataset oficial tiene cerca de un 3.5% de fraude real, fijamos la contaminación ahí
+    # Configuración dinámicamente inyectada
     print("[ETL - TRANSFORM] Entrenando Isolation Forest (Capa No Supervisada)...")
-    iso_forest = IsolationForest(n_estimators=100, contamination=0.035, random_state=42, n_jobs=-1)
+    iso_forest = IsolationForest(
+        n_estimators=iso_config['n_estimators'], 
+        contamination=iso_config['contamination'], 
+        random_state=iso_config['random_state'], 
+        n_jobs=-1
+    )
     
     # Predecimos anomalías (-1 = Anómalo, 1 = Normal)
     preds = iso_forest.fit_predict(df_sub)
     
     # Mapeamos a binario estándar de negocio: 1 para anómalo, 0 para normal
     df_transformed['is_anomaly'] = [1 if p == -1 else 0 for p in preds]
-    # Guardamos el score de anomalía (valores más bajos/negativos indican mayor rareza)
+    # Guardamos el score de anomalía
     df_transformed['anomaly_score'] = iso_forest.score_samples(df_sub)
     
     print("[ETL - TRANSFORM] Transformación y etiquetado de anomalías finalizado.")
     return df_transformed
 
 
-def load_processed_data(df, output_filename="enriched_transactions.csv"):
+def load_processed_data(df, config, output_filename="enriched_transactions.csv"):
     """
-    LOAD: Almacena el dataset enriquecido listo para el modelo supervisado o analistas.
+    LOAD: Almacena el dataset enriquecido respetando las rutas del config.yaml.
     """
-    print(f"\n[ETL - LOAD] Guardando datos procesados en la ruta local...")
-    if not os.path.exists(DATA_PROCESSED_DIR):
-        os.makedirs(DATA_PROCESSED_DIR)
-        
-    output_path = os.path.join(DATA_PROCESSED_DIR, output_filename)
+    # CORRECCIÓN: Ajuste de la sección 'rutas' a la llave estructural real 'data'
+    processed_dir = config['data']['processed_dir']
+    print(f"\n[ETL - LOAD] Guardando datos procesados en la ruta configurada...")
     
-    # Guardamos en formato CSV comprimido o estándar
-    # Debido a las 436 columnas, esto puede tomar un par de minutos en el disco
+    if not os.path.exists(processed_dir):
+        os.makedirs(processed_dir)
+        
+    output_path = os.path.join(processed_dir, output_filename)
+    
+    # Guardamos en formato CSV
     df.to_csv(output_path, index=False)
     print(f"[ETL - LOAD] ARCHIVO GUARDADO EXITOSAMENTE EN: {output_path}")
 
@@ -89,10 +96,13 @@ if __name__ == "__main__":
     print("=== RUNNING PREVENCION DE FRAUDE PIPELINE: PRODUCTION VERSION ===")
     print("==================================================================")
     
-    # Ejecución secuencial
-    df_raw = extract_ieee_data()
-    df_enriched = transform_and_enrich(df_raw)
-    load_processed_data(df_enriched)
+    # Cargar la configuración centralizada antes de iniciar
+    config = cargar_configuracion()
+    
+    # Ejecución secuencial parametrizada
+    df_raw = extract_ieee_data(config)
+    df_enriched = transform_and_enrich(df_raw, config)
+    load_processed_data(df_enriched, config)
     
     print("\n=== Control de calidad del Pipeline ===")
     print("Distribución de anomalías encontradas por Isolation Forest:")
